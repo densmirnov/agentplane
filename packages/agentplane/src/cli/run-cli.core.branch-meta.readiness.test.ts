@@ -246,6 +246,31 @@ describe("runCli", () => {
       expect(code).toBe(0);
       expect(io.stdout).toContain("agentplane quickstart");
       expect(io.stdout).toContain("agentplane init");
+      expect(io.stdout).toContain("Workflow route notes:");
+      expect(io.stdout).toContain("`direct`: task setup is");
+      expect(io.stdout).not.toContain(
+        "`branch_pr`: use `agentplane task next-action <task-id> --explain`",
+      );
+    } finally {
+      io.restore();
+    }
+  });
+
+  it("quickstart prints branch_pr-specific route output when configured", async () => {
+    const root = await mkGitRepoRoot();
+    await writeConfig(root, {
+      ...defaultConfig(),
+      workflow_mode: "branch_pr",
+    });
+    const io = captureStdIO();
+    try {
+      const code = await runCli(["quickstart", "--root", root]);
+      expect(code).toBe(0);
+      expect(io.stdout).toContain("Workflow route notes:");
+      expect(io.stdout).toContain(
+        "`branch_pr`: use `agentplane task next-action <task-id> --explain`",
+      );
+      expect(io.stdout).not.toContain("`direct`: task setup is");
     } finally {
       io.restore();
     }
@@ -299,6 +324,58 @@ describe("runCli", () => {
       expect(payload.harness_health?.reasons).toContain("workflow_contract_invalid");
       expect(Array.isArray(payload.next_actions)).toBe(true);
     } finally {
+      io.restore();
+    }
+  });
+
+  it("preflight --json points unavailable cloud backends at local fallback config review", async () => {
+    const root = await mkGitRepoRoot();
+    const config = defaultConfig();
+    config.agents.approvals.require_network = false;
+    await writeConfig(root, config);
+    await mkdir(path.join(root, ".agentplane", "backends", "local"), { recursive: true });
+    await writeFile(
+      path.join(root, ".agentplane", "backends", "local", "backend.json"),
+      JSON.stringify({
+        id: "cloud",
+        settings: {
+          endpoint: "https://cloud.example",
+          token: "test-token",
+          project_id: "proj_123",
+          cache_dir: ".agentplane/tasks",
+        },
+      }),
+      "utf8",
+    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("", { status: 502, statusText: "Bad Gateway" }));
+    const io = captureStdIO();
+    try {
+      const code = await runCli(["preflight", "--json", "--mode", "full", "--root", root]);
+      expect(code).toBe(0);
+      const payload = JSON.parse(io.stdout) as {
+        task_list_loaded?: { ok?: boolean; error?: string };
+        next_actions?: { command?: string; reason?: string }[];
+        harness_health?: { reasons?: string[] };
+      };
+      expect(payload.task_list_loaded?.ok).toBe(false);
+      expect(payload.task_list_loaded?.error).toContain("Cloud backend request failed: HTTP 502");
+      expect(payload.next_actions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            command: "agentplane config show",
+          }),
+        ]),
+      );
+      expect(
+        (payload.next_actions ?? []).some((action) =>
+          String(action.reason).includes("switch the backend id to local"),
+        ),
+      ).toBe(true);
+      expect(payload.harness_health?.reasons).toContain("task_backend_unavailable");
+    } finally {
+      fetchSpy.mockRestore();
       io.restore();
     }
   });

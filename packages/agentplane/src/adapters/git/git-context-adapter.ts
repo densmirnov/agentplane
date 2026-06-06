@@ -33,7 +33,13 @@ export class GitContextAdapter implements GitPort {
     return this.inner.stage(paths);
   }
 
-  commit(opts: { message: string; body?: string; env?: NodeJS.ProcessEnv }): Promise<void> {
+  commit(opts: {
+    message: string;
+    body?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    skipHooks?: boolean;
+  }): Promise<void> {
     return this.inner.commit(opts);
   }
 }

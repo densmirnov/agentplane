@@ -70,10 +70,10 @@
   },
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@agentplaneorg/core": "0.6.15"
+    "@agentplaneorg/core": "0.6.18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node ../../scripts/checks/run-typescript-build.mjs -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "cd ../.. && vitest --config vitest.workspace.ts run --project testkit"
   }

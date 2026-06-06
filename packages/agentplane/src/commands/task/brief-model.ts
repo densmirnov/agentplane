@@ -1,5 +1,9 @@
 import { checkTaskBlueprintSnapshotDrift } from "../blueprint/snapshot-artifact.js";
 import { buildTaskRouteDecision } from "../shared/route-decision.js";
+import {
+  deriveRouteOperatorGuidance,
+  type RouteOperatorGuidance,
+} from "../shared/route-guidance.js";
 import { buildRouteSourceConfidenceBase } from "../shared/source-confidence.js";
 import { loadTaskFromContext, type CommandContext } from "../shared/task-backend.js";
 import {
@@ -90,10 +94,17 @@ export type TaskBrief = {
     authoritative_checkout: string;
     authoritative_checkout_path: string | null;
     mutation_path_hint: string | null;
+    must_run_from: string | null;
+    exact_argv: string[] | null;
+    must_not: string[];
+    return_control_when: string;
+    human_provider_action: string | null;
+    stale_state_check: string;
     evidence_missing: string[];
     verification_candidate: string | null;
     stop_reason: string | null;
   };
+  decision_context: RouteOperatorGuidance;
   verify_steps: {
     filled: boolean;
     quality: "missing" | "fallback" | "specific";
@@ -231,6 +242,7 @@ export async function buildTaskBrief(opts: {
     rootOverride: opts.rootOverride ?? null,
     taskId: opts.parsed.taskId,
   });
+  const decisionContext = deriveRouteOperatorGuidance(route);
   const blueprint = await resolveTaskBlueprintLifecycleSummary({
     task,
     config: opts.commandCtx.config,
@@ -305,10 +317,17 @@ export async function buildTaskBrief(opts: {
       authoritative_checkout: route.executionPacket.authoritativeCheckout,
       authoritative_checkout_path: route.executionPacket.authoritativeCheckoutPath,
       mutation_path_hint: route.executionPacket.mutationPathHint,
+      must_run_from: route.executionPacket.mustRunFrom,
+      exact_argv: route.executionPacket.exactArgv,
+      must_not: route.executionPacket.mustNot,
+      return_control_when: route.executionPacket.returnControlWhen,
+      human_provider_action: route.executionPacket.humanProviderAction,
+      stale_state_check: route.executionPacket.staleStateCheck,
       evidence_missing: route.executionPacket.evidenceMissing,
       verification_candidate: route.executionPacket.verificationCandidate,
       stop_reason: route.executionPacket.stopReason,
     },
+    decision_context: decisionContext,
     verify_steps: {
       filled: isVerifyStepsFilled(verifySteps),
       quality: verifyQuality,

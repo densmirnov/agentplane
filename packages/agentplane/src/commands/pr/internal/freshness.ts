@@ -51,6 +51,7 @@ export async function assessPrArtifactFreshness(opts: {
     (metaDiffstatDigest !== null &&
       opts.currentDiffstatDigest !== null &&
       metaDiffstatDigest === opts.currentDiffstatDigest) ||
+    (metaHeadSha === null && opts.currentDiffstatDigest === null) ||
     metaHeadSha === opts.branchHeadSha ||
     (metaHeadSha !== null &&
       (await isTaskLocalOnlyAdvance({

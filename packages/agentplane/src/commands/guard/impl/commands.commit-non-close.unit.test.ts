@@ -134,6 +134,7 @@ describe("guard command implementations: commit non-close", () => {
     expect(ctx.git.commit).toHaveBeenCalledWith({
       message: "✅ ABC123 task: message",
       env: { AGENTPLANE_TASK_ID: "T-1" },
+      timeoutMs: 600_000,
     });
   });
 
@@ -185,6 +186,7 @@ describe("guard command implementations: commit non-close", () => {
     expect(ctx.git.commit).toHaveBeenNthCalledWith(1, {
       message: "🧩 7SRWEX workflow: implementation body",
       env: { AGENTPLANE_TASK_ID: "202604130818-7SRWEX" },
+      timeoutMs: 600_000,
     });
     expect(ctx.git.commit).toHaveBeenCalledTimes(1);
     expect(ctx.git.commitAmendNoEdit).toHaveBeenCalledWith({
@@ -192,6 +194,7 @@ describe("guard command implementations: commit non-close", () => {
         AGENTPLANE_TASK_ID: "202604130818-7SRWEX",
         AGENTPLANE_ALLOW_TASKS: "1",
       },
+      timeoutMs: 600_000,
     });
   });
 
@@ -285,6 +288,7 @@ describe("guard command implementations: commit non-close", () => {
     expect(ctx.git.commit).toHaveBeenCalledWith({
       message: "✅ ABC123 task: message",
       env: { AGENTPLANE_TASK_ID: "T-6" },
+      timeoutMs: 600_000,
     });
   });
 
@@ -464,6 +468,7 @@ describe("guard command implementations: commit non-close", () => {
     expect(ctx.git.commit).toHaveBeenCalledWith({
       message: "✅ ABC123 task: message",
       env: { AGENTPLANE_TASK_ID: "T-CI" },
+      timeoutMs: 600_000,
     });
   });
 
@@ -500,6 +505,52 @@ describe("guard command implementations: commit non-close", () => {
         quiet: true,
       }),
     ).rejects.toMatchObject(errorMatcher);
+  });
+
+  it("cmdCommit maps git commit timeouts to hook finalization diagnostics", async () => {
+    const { cmdCommit } = await import("./commit.js");
+    const ctx = mkCtx();
+    ctx.git.statusStagedPaths.mockResolvedValue(["src/app.ts"]);
+    ctx.git.commit.mockRejectedValue(
+      Object.assign(new Error("Command timed out: git commit"), {
+        cmd: "git commit -m ✅ ABC123 task: message",
+        timedOut: true,
+      }),
+    );
+
+    const err = await cmdCommit({
+      ctx: ctx as never,
+      cwd: "/repo",
+      taskId: "T-10",
+      message: "✅ ABC123 task: message",
+      close: false,
+      allow: ["src"],
+      autoAllow: false,
+      allowTasks: false,
+      allowBase: false,
+      allowPolicy: false,
+      allowConfig: false,
+      allowHooks: false,
+      allowCI: false,
+      requireClean: false,
+      quiet: true,
+    }).catch((error: unknown) => error);
+
+    expect(ctx.git.commit).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 600_000 }));
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe("E_GIT");
+    expect((err as CliError).context).toMatchObject({
+      reason_code: "git_commit_timeout",
+      diagnostic_next_action_command: "agentplane doctor",
+      diagnostic_next_action_reason_code: "git_commit_timeout",
+    });
+    expect(readDiagnosticContext((err as CliError).context)).toMatchObject({
+      state: "git commit timed out while waiting for hooks or commit finalization",
+      nextAction: {
+        command: "agentplane doctor",
+        reasonCode: "git_commit_timeout",
+      },
+    });
   });
 
   it("cmdCommit preserves salient linter failure lines in git-commit-shaped errors", async () => {
@@ -601,6 +652,51 @@ describe("guard command implementations: commit non-close", () => {
       nextAction: {
         command: "bun run format",
         reasonCode: "git_pre_commit_format",
+      },
+    });
+  });
+
+  it("cmdCommit identifies killed git hook wrappers separately from policy failures", async () => {
+    const { cmdCommit } = await import("./commit.js");
+    const ctx = mkCtx();
+    ctx.git.statusStagedPaths.mockResolvedValue(["src/app.ts"]);
+    ctx.git.commit.mockRejectedValue(
+      Object.assign(new Error("Command failed with exit code 1: git commit -m task"), {
+        shortMessage: "Command failed with exit code 1: git commit -m task",
+        code: 1,
+        stderr: [
+          "npm exec agentplane hooks run pre-commit",
+          "prepare-commit-msg hook failed",
+          "process exited with signal SIGKILL",
+        ].join("\n"),
+      }),
+    );
+
+    const err = await cmdCommit({
+      ctx: ctx as never,
+      cwd: "/repo",
+      taskId: "T-9",
+      message: "task",
+      close: false,
+      allow: ["src"],
+      autoAllow: false,
+      allowTasks: false,
+      allowBase: false,
+      allowPolicy: false,
+      allowConfig: false,
+      allowHooks: false,
+      allowCI: false,
+      requireClean: false,
+      quiet: true,
+    }).catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toContain("process exited with signal SIGKILL");
+    expect(readDiagnosticContext((err as CliError).context)).toMatchObject({
+      state: "git hook wrapper failed during the task-scoped commit",
+      nextAction: {
+        command: "agentplane doctor",
+        reasonCode: "git_hook_wrapper_unstable",
       },
     });
   });

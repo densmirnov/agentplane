@@ -1,10 +1,11 @@
 ---
 id: "202606031931-MY3BW9"
-title: "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run"
-status: "DOING"
+title: "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run"
+result_summary: "Merged via PR #4414."
+status: "DONE"
 priority: "med"
 owner: "CODER"
-revision: 6
+revision: 7
 origin:
   system: "manual"
 depends_on: []
@@ -92,11 +93,16 @@ runner:
         kind: "task"
         task_id: "202606031931-MY3BW9"
       updated_at: "2026-06-03T20:02:27.898Z"
-commit: null
+commit:
+  hash: "b1ea35882a0725437785efdda2720ef7c213ded3"
+  message: "Merge pull request #4414 from densmirnov/task/202606031931-MY3BW9/fix-upstream-issue-4407-direct-workflow-leaves-v"
 comments:
   -
     author: "CODER"
-    body: "Start: investigating the stale active-task lifecycle in branch_pr mode, reproducing issue #4407, and preparing a bounded fix with focused verification evidence."
+    body: "Start: investigating the stale active-task lifecycle in branch_pr mode, reproducing issue #4417, and preparing a bounded fix with focused verification evidence."
+  -
+    author: "INTEGRATOR"
+    body: "Verified: PR #4414 merged on GitHub main; hosted closure automation recorded canonical task artifacts."
 events:
   -
     type: "status"
@@ -104,24 +110,31 @@ events:
     author: "CODER"
     from: "TODO"
     to: "DOING"
-    note: "Start: investigating the stale active-task lifecycle in branch_pr mode, reproducing issue #4407, and preparing a bounded fix with focused verification evidence."
+    note: "Start: investigating the stale active-task lifecycle in branch_pr mode, reproducing issue #4417, and preparing a bounded fix with focused verification evidence."
+  -
+    type: "status"
+    at: "2026-06-04T05:02:40.021Z"
+    author: "INTEGRATOR"
+    from: "DOING"
+    to: "DONE"
+    note: "Verified: PR #4414 merged on GitHub main; hosted closure automation recorded canonical task artifacts."
 doc_version: 3
-doc_updated_at: "2026-06-03T20:32:56.018Z"
-doc_updated_by: "CODER"
-description: "Resolve https://github.com/basilisk-labs/agentplane/issues/4407"
+doc_updated_at: "2026-06-04T05:02:40.027Z"
+doc_updated_by: "INTEGRATOR"
+description: "Resolve https://github.com/basilisk-labs/agentplane/issues/4417"
 sections:
   Summary: |-
-    Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run
+    Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run
 
-    Resolve https://github.com/basilisk-labs/agentplane/issues/4407
+    Resolve https://github.com/basilisk-labs/agentplane/issues/4417
   Scope: |-
-    - In scope: Resolve https://github.com/basilisk-labs/agentplane/issues/4407.
-    - Out of scope: unrelated refactors not required for "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run".
+    - In scope: Resolve https://github.com/basilisk-labs/agentplane/issues/4417.
+    - Out of scope: unrelated refactors not required for "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run".
   Plan: "1. Reproduce the stale-active-task behavior for verified direct-workflow tasks and identify the lifecycle state source that keeps them active. 2. Patch the task lifecycle/status pipeline so verified direct-workflow tasks leave the active set and no longer route back to run. 3. Add or update focused tests for the stale-active-task path and run targeted verification plus required route/doctor checks. 4. Record verification evidence, publish concise upstream milestone comments, and close the task only after implementation evidence is complete."
   Verify Steps: |-
-    PLANNER fallback scaffold for "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run". Replace with task-specific acceptance checks when PLANNER context is available.
+    PLANNER fallback scaffold for "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run". Replace with task-specific acceptance checks when PLANNER context is available.
 
-    1. Review the requested outcome for "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run". Expected: the visible result matches ## Summary and stays inside approved scope.
+    1. Review the requested outcome for "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run". Expected: the visible result matches ## Summary and stays inside approved scope.
     2. Run the most relevant validation step for this task. Expected: it succeeds without unexpected regressions in touched behavior.
     3. Compare the final result against ## Scope and record any residual follow-up in ## Findings. Expected: open edges are explicit rather than implicit.
   Verification: |-
@@ -192,14 +205,14 @@ id_source: "generated"
 ---
 ## Summary
 
-Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run
+Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run
 
-Resolve https://github.com/basilisk-labs/agentplane/issues/4407
+Resolve https://github.com/basilisk-labs/agentplane/issues/4417
 
 ## Scope
 
-- In scope: Resolve https://github.com/basilisk-labs/agentplane/issues/4407.
-- Out of scope: unrelated refactors not required for "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run".
+- In scope: Resolve https://github.com/basilisk-labs/agentplane/issues/4417.
+- Out of scope: unrelated refactors not required for "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run".
 
 ## Plan
 
@@ -207,9 +220,9 @@ Resolve https://github.com/basilisk-labs/agentplane/issues/4407
 
 ## Verify Steps
 
-PLANNER fallback scaffold for "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run". Replace with task-specific acceptance checks when PLANNER context is available.
+PLANNER fallback scaffold for "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run". Replace with task-specific acceptance checks when PLANNER context is available.
 
-1. Review the requested outcome for "Fix upstream issue #4407: Direct workflow leaves verified tasks active and routes them back to run". Expected: the visible result matches ## Summary and stays inside approved scope.
+1. Review the requested outcome for "Fix upstream issue #4417: Stop direct closeout from routing verified tasks back to run". Expected: the visible result matches ## Summary and stays inside approved scope.
 2. Run the most relevant validation step for this task. Expected: it succeeds without unexpected regressions in touched behavior.
 3. Compare the final result against ## Scope and record any residual follow-up in ## Findings. Expected: open edges are explicit rather than implicit.
 

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { execFileAsync } from "@agentplaneorg/core/process";
+import { resolveGhCommand } from "../shared/gh-transport.js";
 
 import { mapBackendError } from "../../cli/error-map.js";
 import { exitCodeForError } from "../../cli/exit-codes.js";
@@ -44,10 +45,12 @@ async function lookupGithubMergeDiagnostic(opts: {
   prNumber: number | null;
 }): Promise<GithubMergeDiagnostic | null> {
   if (opts.prNumber === null) return null;
+  const gh = resolveGhCommand();
   try {
     const { stdout } = await execFileAsync(
-      "gh",
+      gh.command,
       [
+        ...gh.argsPrefix,
         "pr",
         "view",
         String(opts.prNumber),
@@ -71,6 +74,17 @@ function mergeDiagnosticNextAction(diag: GithubMergeDiagnostic): string {
     return "auto-merge is enabled; wait for GitHub branch protection to unblock or inspect the protection rule";
   }
   return "inspect GitHub branch protection or enable auto-merge through the integration route";
+}
+
+function artifactFreshnessLabel(opts: {
+  snapshot: PrArtifactSnapshot;
+  branchHeadSha: string | null;
+  requiresVerify: boolean;
+}): "fresh" | "stale" | "unknown" {
+  if (!opts.snapshot.meta || !opts.branchHeadSha) return "unknown";
+  if (!opts.snapshot.freshnessReviewFresh) return "stale";
+  if (opts.requiresVerify && !opts.snapshot.freshnessVerifySatisfied) return "stale";
+  return "fresh";
 }
 
 export async function cmdPrCheck(opts: {
@@ -200,14 +214,12 @@ export async function cmdPrCheck(opts: {
       requiresVerify,
     });
 
+    const localNeedsBranchSnapshot =
+      !localSnapshot.meta ||
+      !localSnapshot.freshnessReviewFresh ||
+      (requiresVerify && !localSnapshot.freshnessVerifySatisfied);
     let selectedSnapshot = localSnapshot;
-    if (
-      branchForFreshness &&
-      branchHeadSha &&
-      (!localSnapshot.meta ||
-        !localSnapshot.freshnessReviewFresh ||
-        (requiresVerify && !localSnapshot.freshnessVerifySatisfied))
-    ) {
+    if (branchForFreshness && branchHeadSha && localNeedsBranchSnapshot) {
       const branchSnapshot = await buildBranchSnapshot({
         resolved,
         prDir,
@@ -340,13 +352,34 @@ export async function cmdPrCheck(opts: {
       output.line(`next_action: ${mergeDiagnosticNextAction(mergeDiagnostic)}`);
     }
 
+    const artifactFreshness = artifactFreshnessLabel({
+      snapshot: selectedSnapshot,
+      branchHeadSha,
+      requiresVerify,
+    });
     output.line(
       [
         `artifact_source: ${selectedSnapshot.source}`,
         `artifact_branch=${selectedSnapshot.sourceBranch ?? branchForFreshness ?? "none"}`,
+        `artifact_freshness=${artifactFreshness}`,
         `branch_head=${branchHeadSha ?? "unknown"}`,
         `meta_head=${selectedSnapshot.meta?.head_sha ?? "unknown"}`,
         `verify_status=${selectedSnapshot.meta?.verify?.status ?? "unknown"}`,
+      ].join(" "),
+    );
+    if (artifactFreshness !== "fresh") {
+      output.line(
+        "route_hint: artifact freshness is not confirmed; if task next-action still loops on PR update after this check passes, inspect hosted PR truth before rerunning mutation",
+      );
+    }
+    output.line(
+      [
+        "decision_context:",
+        "source_of_truth=pr_check",
+        `artifact_freshness=${artifactFreshness}`,
+        `remote_checked=${String(prNumber !== null || opts.hosted === true)}`,
+        "repeat_policy=do_not_repeat_pr_update_blindly",
+        `safe_diagnostic=agentplane pr check ${task.id}`,
       ].join(" "),
     );
     output.success("pr check", path.relative(resolved.gitRoot, prDir));

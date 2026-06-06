@@ -1,4 +1,5 @@
 import { createCliEmitter, infoMessage } from "../../cli/output.js";
+import { routeRunnerContextIsRelevant } from "../shared/route-guidance.js";
 import type { TaskBrief } from "./brief-model.js";
 
 function splitNonEmptyLines(text: string): string[] {
@@ -39,11 +40,67 @@ export function reportTaskBriefText(brief: TaskBrief, taskId: string): void {
       { label: "pr_branch", value: brief.workflow.pr_branch ?? "missing" },
       { label: "next_code", value: brief.next_action.code },
       { label: "next", value: brief.next_action.command ?? brief.next_action.summary },
+      { label: "operator_action", value: brief.decision_context.operatorAction },
+      { label: "can_execute_now", value: String(brief.decision_context.canExecuteNow) },
+      { label: "safe_command", value: brief.decision_context.safeCommand ?? "none" },
+      {
+        label: "diagnostic_command",
+        value: brief.decision_context.diagnosticCommand ?? "none",
+      },
+      {
+        label: "source_of_truth",
+        value:
+          `route=${brief.decision_context.sourceOfTruth.route} ` +
+          `diagnostic=${brief.decision_context.sourceOfTruth.diagnostic} ` +
+          `remote=${brief.decision_context.sourceOfTruth.remote}`,
+      },
+      {
+        label: "repeat_policy",
+        value:
+          `allowed=${String(brief.decision_context.repeatPolicy.allowed)} ` +
+          `recompute=${brief.decision_context.repeatPolicy.recomputeCommand}`,
+      },
+      ...(routeRunnerContextIsRelevant(brief.decision_context)
+        ? [
+            {
+              label: "runner_context",
+              value:
+                `required=${String(brief.decision_context.runnerContext.runnerIsRequired)} ` +
+                `allowed_now=${String(brief.decision_context.runnerContext.runnerIsAllowedNow)} ` +
+                `failure_means=${brief.decision_context.runnerContext.runnerFailureMeans}`,
+            },
+          ]
+        : []),
       {
         label: "safe_to_mutate",
         value: String(brief.execution_packet.safe_to_mutate),
       },
+      { label: "recommended_role", value: brief.execution_packet.recommended_role },
+      {
+        label: "must_run_from",
+        value: brief.execution_packet.must_run_from ?? "unknown",
+      },
+      {
+        label: "exact_argv",
+        value: brief.execution_packet.exact_argv?.join(" ") ?? "none",
+      },
+      {
+        label: "return_control_when",
+        value: brief.execution_packet.return_control_when,
+      },
+      {
+        label: "stale_state_check",
+        value: brief.execution_packet.stale_state_check,
+      },
+      {
+        label: "evidence_missing",
+        value: brief.execution_packet.evidence_missing.join(", ") || "none",
+      },
       { label: "requires_approval", value: String(brief.next_action.requires_approval) },
+      {
+        label: "human_provider_action",
+        value: brief.execution_packet.human_provider_action ?? "none",
+      },
       { label: "remote", value: brief.remote.note },
       { label: "confidence", value: formatSourceConfidence(brief.source_confidence) },
     ],
@@ -77,6 +134,14 @@ export function reportTaskBriefText(brief: TaskBrief, taskId: string): void {
   }
   for (const blocker of brief.blockers) {
     output.line(`blocker: ${blocker.code}: ${blocker.summary}`);
+  }
+  for (const rule of brief.execution_packet.must_not) {
+    output.line(`must_not: ${rule}`);
+  }
+  for (const risk of brief.decision_context.risks) {
+    output.line(
+      `decision_risk: ${risk.code}: ${risk.summary}; mitigation: ${risk.mitigationCommand}; stop: ${risk.stopCondition}`,
+    );
   }
   output.line(`verify_steps_quality: ${brief.verify_steps.quality}`);
   output.line("verify_steps:");

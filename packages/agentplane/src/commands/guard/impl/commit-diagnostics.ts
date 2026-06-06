@@ -12,7 +12,13 @@ type ExecFileLikeError = Error & {
 };
 
 export type CommitFailurePhase = "task_commit" | "close_commit";
-type CommitFailureSignal = "formatter" | "eslint" | null;
+type CommitFailureSignal =
+  | "formatter"
+  | "eslint"
+  | "commit_subject"
+  | "dco"
+  | "hook_wrapper"
+  | null;
 
 const COMMIT_FAILURE_SIGNAL_PATTERNS = [
   /Code style issues found/i,
@@ -28,6 +34,21 @@ const FORMATTER_SIGNAL_PATTERNS = [
   /Run Prettier with --write/i,
 ] as const;
 const ESLINT_SIGNAL_PATTERNS = [/\bESLint\b/i, /\b[0-9]+\s+problems?\b/i] as const;
+const COMMIT_SUBJECT_SIGNAL_PATTERNS = [
+  /commit subject must match/i,
+  /commit subject is too generic/i,
+  /task-like commit subject found/i,
+] as const;
+const DCO_SIGNAL_PATTERNS = [/DCO sign-off is required/i, /Signed-off-by:/i] as const;
+const HOOK_WRAPPER_SIGNAL_PATTERNS = [
+  /\bSIGKILL\b/i,
+  /\bsignal\s+9\b/i,
+  /\bkilled\b/i,
+  /\bprepare-commit-msg\b/i,
+  /\bpre-commit\b/i,
+  /\bcommit-msg\b/i,
+  /\bnpm\s+exec\s+agentplane\s+hooks\s+run\b/i,
+] as const;
 
 function readText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -74,6 +95,11 @@ function summarizeOutput(raw: string): string[] {
 function detectCommitFailureSignal(output: string): CommitFailureSignal {
   if (FORMATTER_SIGNAL_PATTERNS.some((pattern) => pattern.test(output))) return "formatter";
   if (ESLINT_SIGNAL_PATTERNS.some((pattern) => pattern.test(output))) return "eslint";
+  if (COMMIT_SUBJECT_SIGNAL_PATTERNS.some((pattern) => pattern.test(output))) {
+    return "commit_subject";
+  }
+  if (DCO_SIGNAL_PATTERNS.some((pattern) => pattern.test(output))) return "dco";
+  if (HOOK_WRAPPER_SIGNAL_PATTERNS.some((pattern) => pattern.test(output))) return "hook_wrapper";
   return null;
 }
 
@@ -83,6 +109,7 @@ function commitFailureDiagnostic(
 ): {
   state: string;
   likelyCause: string;
+  hint?: string;
   nextAction?: {
     command: string;
     reason: string;
@@ -100,6 +127,7 @@ function commitFailureDiagnostic(
         phase === "close_commit"
           ? "a formatting check in the pre-commit path rejected the deterministic close commit after the task README was staged"
           : "a formatting check in the pre-commit path rejected the staged task-scoped commit",
+      hint: "treat this as source formatting evidence; fix formatting before retrying the commit",
       nextAction: {
         command: "bun run format",
         reason: "apply formatter fixes before retrying the commit flow",
@@ -117,10 +145,63 @@ function commitFailureDiagnostic(
         phase === "close_commit"
           ? "a lint check in the pre-commit path rejected the deterministic close commit after the task README was staged"
           : "a lint check in the pre-commit path rejected the staged task-scoped commit",
+      hint: "treat this as source lint evidence; fix lint output before retrying the commit",
       nextAction: {
         command: "bun run lint:core",
         reason: "rerun lint and fix the reported error before retrying the commit flow",
         reasonCode: "git_pre_commit_lint",
+      },
+    };
+  }
+  if (signal === "commit_subject") {
+    return {
+      state:
+        phase === "close_commit"
+          ? "git rejected the generated close commit subject"
+          : "git rejected the requested commit subject",
+      likelyCause:
+        phase === "close_commit"
+          ? "the generated close commit subject does not satisfy the repository commit-msg policy"
+          : "the requested commit subject does not satisfy the repository commit-msg policy",
+      hint: "fix the commit subject format before retrying; do not inspect repository context unless the subject is already valid",
+      nextAction: {
+        command: "git commit --amend -s",
+        reason: "retry with a compliant subject that matches the required task suffix/scope format",
+        reasonCode: "git_commit_subject_policy",
+      },
+    };
+  }
+  if (signal === "dco") {
+    return {
+      state:
+        phase === "close_commit"
+          ? "git rejected the generated close commit DCO trailer"
+          : "git rejected the requested commit DCO trailer",
+      likelyCause: "the commit message is missing a valid Signed-off-by trailer",
+      hint: "add a DCO sign-off before retrying; the staged payload does not need repository-context triage first",
+      nextAction: {
+        command: "git commit -s",
+        reason: "retry the same commit with a valid Signed-off-by trailer",
+        reasonCode: "git_commit_dco_missing",
+      },
+    };
+  }
+  if (signal === "hook_wrapper") {
+    return {
+      state:
+        phase === "close_commit"
+          ? "git hook wrapper failed during the generated close commit"
+          : "git hook wrapper failed during the task-scoped commit",
+      likelyCause:
+        phase === "close_commit"
+          ? "a git hook process or hook wrapper failed after the close-commit payload was prepared; this is hook infrastructure evidence until direct validation proves otherwise"
+          : "a git hook process or hook wrapper failed after guard validation passed; this is hook infrastructure evidence until direct validation proves otherwise",
+      hint: "do not mark task verification failed from hook-wrapper failure alone; compare with direct validation output first",
+      nextAction: {
+        command: "agentplane doctor",
+        reason:
+          "inspect managed hook readiness and preserve direct validation evidence before retrying the commit flow",
+        reasonCode: "git_hook_wrapper_unstable",
       },
     };
   }
@@ -129,6 +210,7 @@ function commitFailureDiagnostic(
       state: "git rejected the generated close commit",
       likelyCause:
         "a hook or commit policy blocked the deterministic task close commit after the task README was staged",
+      hint: "classify the hook output before retrying; policy failure and wrapper failure require different recovery",
       nextAction: {
         command: "git status --short --untracked-files=no",
         reason: "inspect the staged close-commit payload before fixing the hook or policy failure",
@@ -139,6 +221,7 @@ function commitFailureDiagnostic(
   return {
     state: "git rejected the requested task-scoped commit",
     likelyCause: "a hook or commit policy blocked the staged changes after guard validation passed",
+    hint: "classify the hook output before retrying; policy failure and wrapper failure require different recovery",
     nextAction: {
       command: "git status --short --untracked-files=no",
       reason: "inspect the staged task-scoped payload before fixing the hook or policy failure",
@@ -176,6 +259,8 @@ export function asCommitFailure(
   if (typeof code === "number") lines.push(`exit_code: ${code}`);
   if (summary.length > 0) lines.push("output_summary:");
   lines.push(...summary.map((line) => `  ${line}`));
+  const diagnostic = commitFailureDiagnostic(phase, output);
+  const reasonCode = diagnostic.nextAction?.reasonCode;
 
   return new CliError({
     exitCode: 5,
@@ -183,7 +268,13 @@ export function asCommitFailure(
     message: lines.join("\n"),
     context: {
       ...context,
-      ...withDiagnosticContext({ command: "commit" }, commitFailureDiagnostic(phase, output)),
+      ...withDiagnosticContext(
+        {
+          command: "commit",
+          ...(reasonCode ? { reason_code: reasonCode } : {}),
+        },
+        diagnostic,
+      ),
     },
   });
 }

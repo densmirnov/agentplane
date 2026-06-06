@@ -11,6 +11,7 @@ import { appendDcoSignoff } from "../../guard/impl/dco.js";
 import { buildGitCommitEnv, resolveCanonicalGitIdentity } from "../../guard/impl/env.js";
 import { toGitPath, gitEnv } from "@agentplaneorg/core/git";
 import { execFileAsync } from "@agentplaneorg/core/process";
+import { resolveGitCommitTimeoutMs } from "../../shared/git-timeouts.js";
 import { gitCurrentBranch } from "../../shared/git-ops.js";
 import type { CommandContext } from "../../shared/task-backend.js";
 
@@ -29,6 +30,20 @@ function isTaskPacketPath(opts: { workflowDir: string; taskId: string; relPath: 
   return (
     normalized === taskReadmePath(opts.workflowDir, opts.taskId) ||
     normalized.startsWith(taskPrDirPrefix(opts.workflowDir, opts.taskId))
+  );
+}
+
+function isAnyTaskPacketPath(opts: {
+  workflowDir: string;
+  taskIds: readonly string[];
+  relPath: string;
+}): boolean {
+  return opts.taskIds.some((taskId) =>
+    isTaskPacketPath({
+      workflowDir: opts.workflowDir,
+      taskId,
+      relPath: opts.relPath,
+    }),
   );
 }
 
@@ -120,6 +135,7 @@ async function resolveTaskPrArtifactCommitStrategy(opts: {
 export async function maybeAutoCommitTaskPrArtifacts(opts: {
   ctx: CommandContext;
   taskId: string;
+  relatedTaskIds?: string[];
   branch: string;
   baseBranch?: string | null;
   strategy?: TaskPrArtifactCommitStrategy;
@@ -131,10 +147,11 @@ export async function maybeAutoCommitTaskPrArtifacts(opts: {
   if (!currentBranch || currentBranch !== opts.branch.trim()) return false;
 
   const changedPaths = await opts.ctx.git.statusChangedPaths();
+  const artifactTaskIds = [opts.taskId, ...(opts.relatedTaskIds ?? [])];
   const taskPacketPaths = changedPaths.filter((relPath) =>
-    isTaskPacketPath({
+    isAnyTaskPacketPath({
       workflowDir: opts.ctx.config.paths.workflow_dir,
-      taskId: opts.taskId,
+      taskIds: artifactTaskIds,
       relPath,
     }),
   );
@@ -144,9 +161,9 @@ export async function maybeAutoCommitTaskPrArtifacts(opts: {
   if (
     cachedPaths.some(
       (relPath) =>
-        !isTaskPacketPath({
+        !isAnyTaskPacketPath({
           workflowDir: opts.ctx.config.paths.workflow_dir,
-          taskId: opts.taskId,
+          taskIds: artifactTaskIds,
           relPath,
         }),
     )
@@ -172,12 +189,19 @@ export async function maybeAutoCommitTaskPrArtifacts(opts: {
     allowCI: false,
     gitIdentity: await resolveCanonicalGitIdentity(),
   });
+  const timeoutMs = resolveGitCommitTimeoutMs();
   await (strategy === "amend"
-    ? opts.ctx.git.commitAmendNoEdit({ env })
+    ? opts.ctx.git.commitAmendNoEdit({
+        env,
+        timeoutMs,
+        skipHooks: true,
+      })
     : opts.ctx.git.commit({
         message: buildTaskArtifactRefreshCommitSubject({ taskId: opts.taskId }),
         body: appendDcoSignoff({ config: opts.ctx.config }),
         env,
+        timeoutMs,
+        skipHooks: true,
       }));
   opts.ctx.git.invalidateStatus();
   return true;

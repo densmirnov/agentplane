@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "../../cli/run-cli.js";
-import { executableStepFor, runAgentplaneStep } from "./hermes-runtime.js";
+import {
+  executableStepFor,
+  routeNeedsRunnerProjection,
+  runAgentplaneStep,
+} from "./hermes-runtime.js";
+import type { TaskRouteDecision } from "../shared/route-decision-types.js";
 import { captureStdIO, mkGitRepoRoot, runCliSilent } from "@agentplane/testkit";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -101,12 +106,17 @@ describe("hermes adapter commands", () => {
   it("propagates child failure codes for typed task run steps", async () => {
     const root = await mkGitRepoRoot();
     const taskId = "202606010525-5TJNPS";
-    const fakeBin = path.join(root, "failing-agentplane.sh");
-    await writeFile(fakeBin, "#!/bin/sh\necho task-run-failed >&2\nexit 9\n");
+    const fakeBin = path.join(root, "failing-agentplane.js");
+    await writeFile(
+      fakeBin,
+      "#!/usr/bin/env node\nconsole.error('task-run-failed');\nprocess.exit(9);\n",
+    );
     await chmod(fakeBin, 0o755);
 
     const previous = process.env.AGENTPLANE_BIN;
-    process.env.AGENTPLANE_BIN = fakeBin;
+    const previousArgs = process.env.AGENTPLANE_BIN_ARGS;
+    process.env.AGENTPLANE_BIN = process.execPath;
+    process.env.AGENTPLANE_BIN_ARGS = JSON.stringify([fakeBin]);
     try {
       const result = await runAgentplaneStep(["task", "run", taskId], root, false);
       expect(result.executed).toBe(true);
@@ -117,6 +127,11 @@ describe("hermes adapter commands", () => {
         delete process.env.AGENTPLANE_BIN;
       } else {
         process.env.AGENTPLANE_BIN = previous;
+      }
+      if (previousArgs === undefined) {
+        delete process.env.AGENTPLANE_BIN_ARGS;
+      } else {
+        process.env.AGENTPLANE_BIN_ARGS = previousArgs;
       }
     }
   });
@@ -152,11 +167,17 @@ describe("hermes adapter commands", () => {
             authority: { status_sync: string };
             comment_projection: {
               schema: string;
-              evidence_refs: { runner_status: string; runner_inspect: string };
+              execution_packet: {
+                staleStateCheck: string;
+                returnControlWhen: string;
+                mustNot: string[];
+              };
+              evidence_refs: Record<string, string>;
+              runner: null;
             };
           };
         };
-        evidence_refs: { runner_event_logs: string };
+        evidence_refs: Record<string, string>;
         sync_field_policies: { status: { authority: string } };
       };
       expect(payload.idempotency_key).toContain(`agentplane:${root}:${taskId}:CODER`);
@@ -167,15 +188,23 @@ describe("hermes adapter commands", () => {
       expect(payload.metadata.agentplane.comment_projection.schema).toBe(
         "agentplane.hermes.lifecycle-comment.v1",
       );
-      expect(payload.metadata.agentplane.comment_projection.evidence_refs.runner_status).toBe(
-        `agentplane task run status ${taskId} --json`,
+      expect(payload.metadata.agentplane.comment_projection.execution_packet.staleStateCheck).toBe(
+        `agentplane task next-action ${taskId} --explain`,
       );
-      expect(payload.metadata.agentplane.comment_projection.evidence_refs.runner_inspect).toBe(
-        `agentplane task run inspect ${taskId} --json`,
+      expect(
+        payload.metadata.agentplane.comment_projection.execution_packet.returnControlWhen,
+      ).toContain("recompute task next-action");
+      expect(payload.metadata.agentplane.comment_projection.execution_packet.mustNot).toContain(
+        "do not reconstruct branch/worktree/PR state from prose",
       );
-      expect(payload.evidence_refs.runner_event_logs).toBe(
-        `agentplane task run logs ${taskId} --stream events`,
+      expect(payload.metadata.agentplane.comment_projection.runner).toBeNull();
+      expect(payload.metadata.agentplane.comment_projection.evidence_refs).not.toHaveProperty(
+        "runner_status",
       );
+      expect(payload.metadata.agentplane.comment_projection.evidence_refs).not.toHaveProperty(
+        "runner_inspect",
+      );
+      expect(payload.evidence_refs).not.toHaveProperty("runner_event_logs");
       expect(payload.sync_field_policies.status.authority).toBe("agentplane");
     } finally {
       io.restore();
@@ -197,13 +226,14 @@ describe("hermes adapter commands", () => {
           execute_raw_shell_from_route: boolean;
           max_route_steps_per_claim: number;
         };
-        runner: {
-          latest_available: boolean;
-          commands: { status: string; inspect: string; event_logs: string };
-        };
+        runner: null;
         hermes_comment_projection: {
           schema: string;
-          evidence_refs: { runner_status: string };
+          execution_packet: {
+            staleStateCheck: string;
+            returnControlWhen: string;
+          };
+          evidence_refs: Record<string, string>;
         };
         terminal: { hermes_root_complete_allowed: boolean };
         lifecycle_recommendation: { action: string; command: string; reason: string };
@@ -213,18 +243,17 @@ describe("hermes adapter commands", () => {
       expect(payload.projection_boundary.hermes_authority).toBe("dispatch_run_lifecycle");
       expect(payload.supervisor_policy.execute_raw_shell_from_route).toBe(false);
       expect(payload.supervisor_policy.max_route_steps_per_claim).toBe(1);
-      expect(payload.runner.latest_available).toBe(false);
-      expect(payload.runner.commands.status).toBe(`agentplane task run status ${taskId} --json`);
-      expect(payload.runner.commands.inspect).toBe(`agentplane task run inspect ${taskId} --json`);
-      expect(payload.runner.commands.event_logs).toBe(
-        `agentplane task run logs ${taskId} --stream events`,
-      );
+      expect(payload.runner).toBeNull();
       expect(payload.hermes_comment_projection.schema).toBe(
         "agentplane.hermes.lifecycle-comment.v1",
       );
-      expect(payload.hermes_comment_projection.evidence_refs.runner_status).toBe(
-        payload.runner.commands.status,
+      expect(payload.hermes_comment_projection.execution_packet.staleStateCheck).toBe(
+        `agentplane task next-action ${taskId} --explain`,
       );
+      expect(payload.hermes_comment_projection.execution_packet.returnControlWhen).toContain(
+        "after the provider or human action completes",
+      );
+      expect(payload.hermes_comment_projection.evidence_refs).not.toHaveProperty("runner_status");
       expect(payload.terminal.hermes_root_complete_allowed).toBe(false);
       expect(payload.lifecycle_recommendation.action).toBe("block");
       expect(payload.lifecycle_recommendation.command).toContain("hermes lifecycle block");
@@ -290,6 +319,48 @@ describe("hermes adapter commands", () => {
     });
   });
 
+  it("keeps Hermes runner projection for explicit task run routes", () => {
+    const taskId = "202606010530-BEYQXA";
+    const decision = {
+      task: {
+        id: taskId,
+        title: "Hermes task launch",
+        status: "DOING",
+        owner: "CODER",
+        planApproval: "approved",
+        verification: "pending",
+        commit: null,
+      },
+      nextAction: {
+        code: "run",
+        command: `agentplane task run ${taskId}`,
+        summary: "continue the direct-mode task from the current checkout",
+        requiresApproval: false,
+      },
+      oracle: {
+        phase: "direct_execute",
+        authoritativeCheckout: "current_checkout",
+        authoritativeCheckoutPath: "/repo",
+        mutationPathHint: "/repo",
+        blocker: null,
+        nextCommand: `agentplane task run ${taskId}`,
+        summary: "continue the direct-mode task from the current checkout",
+      },
+      blockers: [],
+      executionPacket: {
+        actionKind: "local_command",
+        safeToMutate: true,
+        exactArgv: ["agentplane", "task", "run", taskId],
+        stopReason: null,
+        returnControlWhen: "after the exact command exits; recompute task next-action",
+        staleStateCheck: `agentplane task next-action ${taskId} --explain`,
+        verificationCandidate: null,
+      },
+    } as TaskRouteDecision;
+
+    expect(routeNeedsRunnerProjection(decision)).toBe(true);
+  });
+
   it("rejects task run route steps for a different task id", () => {
     const step = executableStepFor({
       task: {
@@ -311,12 +382,17 @@ describe("hermes adapter commands", () => {
   it("supervise returns the child Agentplane command failure code", async () => {
     const root = await mkGitRepoRoot();
     const taskId = await createApprovedTask(root);
-    const fakeBin = path.join(root, "failing-agentplane.sh");
-    await writeFile(fakeBin, "#!/bin/sh\necho child-failed >&2\nexit 7\n");
+    const fakeBin = path.join(root, "failing-agentplane.js");
+    await writeFile(
+      fakeBin,
+      "#!/usr/bin/env node\nconsole.error('child-failed');\nprocess.exit(7);\n",
+    );
     await chmod(fakeBin, 0o755);
 
     const previous = process.env.AGENTPLANE_BIN;
-    process.env.AGENTPLANE_BIN = fakeBin;
+    const previousArgs = process.env.AGENTPLANE_BIN_ARGS;
+    process.env.AGENTPLANE_BIN = process.execPath;
+    process.env.AGENTPLANE_BIN_ARGS = JSON.stringify([fakeBin]);
     const io = captureStdIO();
     try {
       const code = await runCli([
@@ -340,6 +416,11 @@ describe("hermes adapter commands", () => {
         delete process.env.AGENTPLANE_BIN;
       } else {
         process.env.AGENTPLANE_BIN = previous;
+      }
+      if (previousArgs === undefined) {
+        delete process.env.AGENTPLANE_BIN_ARGS;
+      } else {
+        process.env.AGENTPLANE_BIN_ARGS = previousArgs;
       }
     }
   });
@@ -438,7 +519,7 @@ describe("hermes adapter commands", () => {
           task: { id: string };
           hermes_comment_projection: {
             agentplane_task_id: string;
-            evidence_refs: { runner_status: string };
+            evidence_refs: Record<string, string>;
           };
         };
         plugin_contract: { remote_board_reads_required: boolean };
@@ -446,8 +527,8 @@ describe("hermes adapter commands", () => {
       expect(payload.mode).toBe("read_only");
       expect(payload.local_projection.task.id).toBe(taskId);
       expect(payload.local_projection.hermes_comment_projection.agentplane_task_id).toBe(taskId);
-      expect(payload.local_projection.hermes_comment_projection.evidence_refs.runner_status).toBe(
-        `agentplane task run status ${taskId} --json`,
+      expect(payload.local_projection.hermes_comment_projection.evidence_refs).not.toHaveProperty(
+        "runner_status",
       );
       expect(payload.plugin_contract.remote_board_reads_required).toBe(true);
     } finally {

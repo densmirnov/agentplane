@@ -8,6 +8,7 @@ import {
   type GitMutationKind,
 } from "../../../shared/git-mutation.js";
 import type { CommandContext } from "../../shared/task-backend.js";
+import { resolveGitCommitTimeoutMs } from "../../shared/git-timeouts.js";
 import { asCommitFailure } from "./commit-diagnostics.js";
 
 const GIT_COMMIT_LOCK_REMEDIATION =
@@ -16,6 +17,14 @@ const GIT_COMMIT_PERMISSION_REMEDIATION =
   "Check repository permissions (uid/gid and write access for .git/*), fix ownership, then retry.";
 const GIT_COMMIT_RACE_REMEDIATION =
   "A conflicting git writer was detected. Retry when merge/rebase/commit operations are not running.";
+function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const record = err as Error & { timedOut?: unknown; code?: unknown; shortMessage?: unknown };
+  const text = [err.message, record.shortMessage]
+    .filter((part): part is string => typeof part === "string")
+    .join("\n");
+  return record.timedOut === true || record.code === "ETIMEDOUT" || /timed out/i.test(text);
+}
 
 function classifyGitCommitFailure(message: string): ErrorCode {
   if (message.includes("index.lock") || /could not lock|unable to create .*lock/.test(message)) {
@@ -77,13 +86,52 @@ export async function runCommitWithLock(opts: {
       taskId: opts.taskId,
     },
     async () => {
+      const gitCommitTimeoutMs = resolveGitCommitTimeoutMs();
       try {
         await opts.ctx.git.commit({
           message: opts.message,
           body: opts.body,
           env: opts.env,
+          timeoutMs: gitCommitTimeoutMs,
         });
       } catch (err) {
+        if (isTimeoutError(err)) {
+          const failureContext = await resolveGitMutationDiagnosticContext({
+            command: "git commit",
+            cwd: opts.ctx.resolvedProject.gitRoot,
+            repoRoot: opts.ctx.resolvedProject.gitRoot,
+            workflowMode: opts.ctx.config.workflow_mode,
+            mutationKind: opts.mutationKind,
+            taskId: opts.taskId,
+            allowPrefixes: opts.allowPrefixes,
+            changedPaths: opts.changedPaths,
+            stagedPaths: opts.stagedPaths,
+          });
+          throw new CliError({
+            exitCode: exitCodeForError("E_GIT"),
+            code: "E_GIT",
+            message: `git commit timed out after ${gitCommitTimeoutMs}ms`,
+            context: withDiagnosticContext(
+              {
+                ...failureContext,
+                reason_code: "git_commit_timeout",
+                git_commit_timeout_ms: gitCommitTimeoutMs,
+              },
+              {
+                state: "git commit timed out while waiting for hooks or commit finalization",
+                likelyCause:
+                  "A git hook, commit-msg policy wrapper, or git commit finalization path stopped making progress after AgentPlane guard validation.",
+                hint: "preserve direct validation evidence; do not keep retrying the same commit command without inspecting hook readiness",
+                nextAction: {
+                  command: "agentplane doctor",
+                  reason:
+                    "inspect managed hook readiness and active git processes before retrying or using an explicit no-verify fallback",
+                  reasonCode: "git_commit_timeout",
+                },
+              },
+            ),
+          });
+        }
         const message = err instanceof Error ? err.message : "git commit failed";
         const code = classifyGitCommitFailure(message);
         if (code === "E_GIT") {

@@ -1,6 +1,6 @@
 {
   "name": "agentplane",
-  "version": "0.6.15",
+  "version": "0.6.18",
   "description": "CLI-first operational workflows and traces for AI agents.",
   "keywords": [
     "agentplane",
@@ -61,8 +61,8 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true}); require('node:fs').rmSync('tsconfig.tsbuildinfo',{force:true});\"",
-    "build": "npm run clean && tsc -b --force && npm run build:bundle",
-    "build:bundle": "node ../../scripts/release/prune-package-js.mjs dist && tsup && node ../../scripts/release/manifest.mjs build .",
+    "build": "npm run clean && node ../../scripts/checks/run-typescript-build.mjs --force && npm run build:bundle",
+    "build:bundle": "node ../../scripts/release/prune-package-js.mjs dist && node ../../scripts/checks/run-tsup-build.mjs && node ../../scripts/release/manifest.mjs build .",
     "typecheck": "tsc -b",
     "test": "cd ../.. && vitest --config vitest.workspace.ts run --project agentplane",
     "prepack": "npm run clean && npm run build && node ../../scripts/release/manifest.mjs sanitize .",
@@ -70,8 +70,8 @@
     "prepublishOnly": "node ../../scripts/release/enforce-github-publish.mjs && npm run prepack"
   },
   "dependencies": {
-    "@agentplaneorg/core": "0.6.15",
-    "@agentplaneorg/recipes": "0.6.15",
+    "@agentplaneorg/core": "0.6.18",
+    "@agentplaneorg/recipes": "0.6.18",
     "@clack/prompts": "^1.5.0",
     "yaml": "^2.7.1",
     "yauzl": "^3.3.2",

@@ -6,6 +6,10 @@ import { isRecord } from "../../shared/guards.js";
 import { resolveAgentplaneBinPath } from "../../shared/package-paths.js";
 import { loadTaskRunnerInspection } from "../../runner/usecases/task-run-inspect.js";
 import { buildTaskRouteDecision } from "../shared/route-decision.js";
+import {
+  deriveRouteOperatorGuidance,
+  routeRunnerContextIsRelevant,
+} from "../shared/route-guidance.js";
 import { loadTaskFromContext, type CommandContext } from "../shared/task-backend.js";
 
 const execFileAsync = promisify(execFile);
@@ -84,7 +88,17 @@ export function currentAgentplaneCommand(): { command: string; argsPrefix: strin
   const rawAgentplaneBin = process.env.AGENTPLANE_BIN?.trim();
   const command =
     rawAgentplaneBin && rawAgentplaneBin.length > 0 ? rawAgentplaneBin : resolveAgentplaneBinPath();
-  return { command, argsPrefix: [] };
+  const rawArgsPrefix = process.env.AGENTPLANE_BIN_ARGS?.trim();
+  if (!rawArgsPrefix) return { command, argsPrefix: [] };
+  try {
+    const parsed = JSON.parse(rawArgsPrefix) as unknown;
+    const argsPrefix = Array.isArray(parsed)
+      ? parsed.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+      : [];
+    return { command, argsPrefix };
+  } catch {
+    return { command, argsPrefix: [] };
+  }
 }
 
 async function runnerVisibilityPacket(opts: {
@@ -144,6 +158,12 @@ async function runnerVisibilityPacket(opts: {
   }
 }
 
+export function routeNeedsRunnerProjection(
+  decision: Awaited<ReturnType<typeof buildTaskRouteDecision>>,
+): boolean {
+  return routeRunnerContextIsRelevant(deriveRouteOperatorGuidance(decision));
+}
+
 export async function routePacket(opts: {
   ctx: CommandContext;
   cwd: string;
@@ -159,12 +179,15 @@ export async function routePacket(opts: {
     taskId: opts.taskId,
     includeRemote: opts.includeRemote,
   });
-  const runner = await runnerVisibilityPacket({
-    ctx: opts.ctx,
-    cwd: opts.cwd,
-    rootOverride: opts.rootOverride,
-    taskId: opts.taskId,
-  });
+  const shouldProjectRunner = routeNeedsRunnerProjection(decision) || Boolean(fullTask.runner);
+  const runner = shouldProjectRunner
+    ? await runnerVisibilityPacket({
+        ctx: opts.ctx,
+        cwd: opts.cwd,
+        rootOverride: opts.rootOverride,
+        taskId: opts.taskId,
+      })
+    : null;
   const terminal = {
     hermes_root_complete_allowed: taskTerminalForHermesComplete(decision.task),
     required_gate:
@@ -205,13 +228,18 @@ export async function routePacket(opts: {
         safe_to_mutate: decision.executionPacket.safeToMutate,
         blockers: decision.blockers,
       },
+      execution_packet: decision.executionPacket,
       runner,
       evidence_refs: {
         task_readme: `.agentplane/tasks/${decision.task.id}/README.md`,
         acr: `.agentplane/tasks/${decision.task.id}/acr.json`,
-        runner_status: runner.commands.status,
-        runner_inspect: runner.commands.inspect,
-        runner_event_logs: runner.commands.event_logs,
+        ...(runner
+          ? {
+              runner_status: runner.commands.status,
+              runner_inspect: runner.commands.inspect,
+              runner_event_logs: runner.commands.event_logs,
+            }
+          : {}),
       },
       terminal,
       authority: projectionBoundary,
@@ -249,7 +277,7 @@ export function buildHermesLifecycleRecommendation(
   return {
     action: "comment",
     command: `${base} comment --body ${JSON.stringify(body)}`,
-    reason: "Agentplane task is non-terminal; project the latest route and runner evidence.",
+    reason: "Agentplane task is non-terminal; project the latest route evidence.",
     body,
   };
 }

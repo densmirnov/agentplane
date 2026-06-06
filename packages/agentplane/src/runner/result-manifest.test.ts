@@ -10,6 +10,7 @@ import {
   invalidRunnerResultManifestPath,
   preserveInvalidRunnerResultManifest,
   readRunnerResultManifest,
+  salvageBlockedRunnerResultManifest,
 } from "./result-manifest.js";
 
 describe("runner result manifest", () => {
@@ -138,6 +139,36 @@ describe("runner result manifest", () => {
     });
   });
 
+  it("accepts blocked terminal manifests for external runner blockers", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentplane-result-manifest-blocked-"));
+    const resultPath = path.join(tempDir, "result.json");
+    await writeFile(
+      resultPath,
+      JSON.stringify({
+        schema_version: 1,
+        status: "blocked",
+        exit_code: 1,
+        summary: "GitHub push permission blocked publication.",
+        evidence: {
+          blocked_reason: "github push returned HTTP 403 for the runner identity",
+          verification_candidates: ["retry publication with a permitted GitHub identity"],
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(readRunnerResultManifest(resultPath)).resolves.toMatchObject({
+      schema_version: 1,
+      status: "blocked",
+      exit_code: 1,
+      summary: "GitHub push permission blocked publication.",
+      evidence: {
+        blocked_reason: "github push returned HTTP 403 for the runner identity",
+        verification_candidates: ["retry publication with a permitted GitHub identity"],
+      },
+    });
+  });
+
   it("preserves malformed manifest payloads for later inspection", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentplane-result-manifest-preserve-"));
     const resultPath = path.join(tempDir, "result.json");
@@ -158,6 +189,30 @@ describe("runner result manifest", () => {
     });
     expect(invalidPath).toBe(invalidRunnerResultManifestPath(resultPath));
     expect(await readFile(invalidPath, "utf8")).toBe(rawManifest);
+  });
+
+  it("salvages blocked guidance from otherwise invalid manifests", () => {
+    const salvaged = salvageBlockedRunnerResultManifest(
+      JSON.stringify({
+        schema_version: 1,
+        summary: "Runner blocked on sibling-owned paths.",
+        artifacts: [{ path: "reports/out.txt", label: "Bad Label" }],
+        evidence: {
+          conflict_paths: ["src/runner/conflict.ts"],
+          blocked_reason: "sibling runner owns the same file",
+          recommended_parent_action: "split task scope before retrying",
+        },
+      }),
+    );
+
+    expect(salvaged).toEqual({
+      summary: "Runner blocked on sibling-owned paths.",
+      evidence: {
+        conflict_paths: ["src/runner/conflict.ts"],
+        blocked_reason: "sibling runner owns the same file",
+        recommended_parent_action: "split task scope before retrying",
+      },
+    });
   });
 
   it("serializes machine summaries and labeled artifacts from runner results", () => {
