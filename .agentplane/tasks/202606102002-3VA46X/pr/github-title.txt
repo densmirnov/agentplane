@@ -1,0 +1,1 @@
+🚧 3VA46X task: Fix upstream issue #4506: agentplane issue creation blocked by dangling task artifacts [202606102002-3VA46X]
